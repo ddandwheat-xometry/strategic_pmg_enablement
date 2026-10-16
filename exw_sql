@@ -1,0 +1,9 @@
+select
+qprd._id as QuoteID
+, max(case when regexp_like(upper(value), '.*EX[- ]?WORKS?.*|.*EXW.*|.*FOB.*|.*DAP.*|.*SHIPPING NOT INCLUDED.*', 's')
+then 1 else 0 end) as Is_Exworks
+from xometry_bi.quotes.quotes_parts_requirements_display qprd
+join xometry_models.quotes.quotes q on qprd._id = q._id
+where qprd.label in ('Notes', 'Value-Engineering Feedback')
+group by qprd._id
+having Is_Exworks = 1
