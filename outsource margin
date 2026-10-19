@@ -1,0 +1,65 @@
+WITH __orders_parts_margin AS (
+  SELECT
+    is_line_item_placeholder = 1 AS is_line_item_placeholder,
+    job_id,
+    order_id,
+    outsourced_part,
+    parts__id,
+    acceptance_time_est AS job_offer_accepted_at_est,
+    bookings_adjusted_with_shipping,
+    extended_price,
+    gp_w_shipping,
+    sourced_gross_profit
+  FROM XOMETRY_MODELS.MARGIN.ORDERS_PARTS_MARGIN
+), __orders_parts AS (
+  SELECT
+    last_history_status,
+    parts__id,
+    COALESCE(process_group, 'Unknown') AS process_group
+  FROM XOMETRY_MODELS.ORDERS.ORDERS_PARTS
+), __orders AS (
+  SELECT exclude_in_reporting, last_history_status, _id
+  FROM XOMETRY_MODELS.ORDERS.ORDERS
+), __orders_staff_pod_name AS (
+  SELECT order_id, staff_pod_name
+  FROM XOMETRY_MODELS.ORDERS.ORDERS_STAFF_POD_NAME
+), __salesforce_account_order AS (
+  SELECT consolidated_account_name, order_id
+  FROM XOMETRY_MODELS.SALESFORCE.ACCOUNT_ORDER
+), b AS (
+  SELECT
+    COALESCE(s.consolidated_account_name, '(No Salesforce account)') AS acct,
+    o._id AS oid,
+    m.job_id,
+    m.bookings_adjusted_with_shipping AS bk,
+    m.gp_w_shipping AS gp,
+    m.extended_price AS ep,
+    m.sourced_gross_profit AS sgp
+  FROM __orders_parts_margin AS m
+  JOIN __orders_parts AS op ON op.parts__id = m.parts__id
+  JOIN __orders AS o ON o._id = m.order_id
+  JOIN __orders_staff_pod_name AS p ON p.order_id = o._id
+  LEFT JOIN __salesforce_account_order AS s ON s.order_id = o._id
+  WHERE p.staff_pod_name = 'Program Management'
+    AND m.outsourced_part = 'Outsourced'
+    AND m.job_offer_accepted_at_est >= '2026-01-01'
+    AND m.job_offer_accepted_at_est < DATEADD(DAY, 1, CURRENT_DATE)
+    AND COALESCE(o.exclude_in_reporting, 0) = 0
+    AND COALESCE(o.last_history_status, '') <> 'Order Cancelled'
+    AND UPPER(COALESCE(op.last_history_status, '')) <> 'PART CANCELLED'
+    AND COALESCE(m.is_line_item_placeholder, FALSE) = FALSE
+    AND op.process_group <> 'Unknown'
+)
+SELECT
+  COALESCE(acct, '** GRAND TOTAL **')        AS consolidated_account_name,
+  SUM(bk)                                    AS bookings_adj_w_shipping,
+  SUM(gp)                                    AS gp_w_shipping,
+  SUM(gp)  / NULLIF(SUM(bk), 0)              AS order_margin_pct_w_shipping,  -- slide: all accounts except Rivian and SAIC
+  SUM(ep)                                    AS extended_price,
+  SUM(sgp)                                   AS sourced_gross_profit,
+  SUM(sgp) / NULLIF(SUM(ep), 0)              AS job_margin_pct_wo_shipping,   -- slide: Rivian and SAIC (*)
+  COUNT(DISTINCT oid)                        AS orders,
+  COUNT(DISTINCT job_id)                     AS jobs
+FROM b
+GROUP BY ROLLUP (acct)
+ORDER BY GROUPING(acct) DESC, bookings_adj_w_shipping DESC NULLS LAST;
